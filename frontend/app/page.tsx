@@ -12,6 +12,7 @@ import { UIMessage, useChat } from '@ai-sdk/react'
 import { WeatherPart } from '@/components/custom-weather'
 import { DefaultChatTransport } from 'ai'
 import { WikiPart } from '../components/custom-wiki'
+import { useState } from 'react'
 
 const initialMessages: UIMessage[] = [
   {
@@ -27,6 +28,8 @@ const initialMessages: UIMessage[] = [
 ]
 
 export default function Page(){
+  const [sessionId, setSessionId] = useState('wiley')
+
   return (
     <div className="flex h-screen flex-col">
       <header className="w-full border-b p-4 text-center">
@@ -38,18 +41,19 @@ export default function Page(){
         </p>
       </header>
       <div className="min-h-0 flex-1">
-        <ChatExample />
+        <ChatExample sessionId={sessionId} />
       </div>
     </div>
   )
 }
 
-function ChatExample() {
+function ChatExample({sessionId}: {sessionId: string}) {
   const handler = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
     }),
     messages: initialMessages,
+    id: sessionId,
   })
 
   return (
