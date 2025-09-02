@@ -4,6 +4,7 @@ import '@llamaindex/chat-ui/styles/pdf.css'
 import '@llamaindex/chat-ui/styles/editor.css'
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
+import AuthContext from './context/AuthContext'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -19,7 +20,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        <AuthContext>
+          {children}
+        </AuthContext>
+      </body>
     </html>
   )
 }

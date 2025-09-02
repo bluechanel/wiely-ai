@@ -1,13 +1,24 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { getCurrentUser } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
+  // 校验用户登录，获取用户id
+  const currentUser = await getCurrentUser();
+  
+  // 如果用户未登录，返回401错误
+  if (!currentUser) {
+    return NextResponse.json(
+      { error: '用户未登录，请先登录' },
+      { status: 401 }
+    );
+  }
+  
   // 读取前端传来的 body
   const body = await req.text();
-  // 校验用户登录，获取用户id
-  const userID = "wiley"
-  // 将userid添加到body
-  const newBody = JSON.parse(body)
-  newBody.user_id = userID
+  
+  // 将用户ID添加到body
+  const newBody = JSON.parse(body);
+  newBody.user_id = currentUser.id;
   const newBodyStr = JSON.stringify(newBody)
 
   // 后端 SSE 接口地址

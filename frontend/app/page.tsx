@@ -13,6 +13,8 @@ import { WeatherPart } from '@/components/custom-weather'
 import { DefaultChatTransport } from 'ai'
 import { WikiPart } from '../components/custom-wiki'
 import { useState } from 'react'
+import Navbar from '@/components/navbar'
+import { useSession } from 'next-auth/react'
 
 const initialMessages: UIMessage[] = [
   {
@@ -28,20 +30,22 @@ const initialMessages: UIMessage[] = [
 ]
 
 export default function Page(){
-  const [sessionId, setSessionId] = useState('wiley')
+  const [chatId, setChatId] = useState('wiley')
+  const { data: session } = useSession()
 
   return (
     <div className="flex h-screen flex-col">
+      <Navbar />
       <header className="w-full border-b p-4 text-center">
         <h1 className="text-2xl font-bold">
-          LlamaIndex Chat UI - Next.js Example
+          Wiley AI - 智能助手
         </h1>
         <p className="text-gray-600">
-          A simple chat interface using @llamaindex/chat-ui
+          {session ? `欢迎回来，${session.user?.email}` : '请登录以获得完整体验'}
         </p>
       </header>
       <div className="min-h-0 flex-1">
-        <ChatExample sessionId={sessionId} />
+        <ChatExample sessionId={chatId} />
       </div>
     </div>
   )

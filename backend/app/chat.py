@@ -46,6 +46,8 @@ async def chat(request: Request) -> StreamingResponse:
     messages = data.get("messages", [])
     user_id = data.get("user_id", "default")
     session_id = data.get("id", "default")
+    logger.debug(f"用户{user_id}")
+    logger.debug(f"聊天{session_id}")
     last_message = messages[-1] if messages else {}
     content = last_message["parts"][0]["text"]
     return StreamingResponse(event_generator(session_id, content), media_type="text/event-stream")
