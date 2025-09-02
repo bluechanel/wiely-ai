@@ -14,12 +14,14 @@
     "@auth/prisma-adapter": "^2.10.0",
     "@llamaindex/chat-ui": "latest",
     "@prisma/client": "^6.15.0",
+    "@types/uuid": "^10.0.0",
     "ai": "^5.0.4",
     "bcrypt": "^6.0.0",
     "next": "15.5.0",
     "next-auth": "^4.24.11",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
