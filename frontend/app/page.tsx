@@ -139,7 +139,9 @@ function CustomChatMessages() {
           </ChatMessage.Avatar>
           <ChatMessage.Content>
             <ChatMessage.Part.File />
-            <ChatMessage.Part.Event />
+            <div className="prose">
+              <ChatMessage.Part.Event />
+            </div>
             <ChatMessage.Part.Markdown />
             <ChatMessage.Part.Artifact />
             <ChatMessage.Part.Source />

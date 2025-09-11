@@ -16,35 +16,18 @@ export async function POST(req: NextRequest) {
   // 读取前端传来的 body
   const body = await req.text();
   
-  // 将用户ID和会话ID添加到body
-  const newBody = JSON.parse(body);
-  newBody.user_id = currentUser.id;
-  
-  // 确保session_id存在，这是从前端传来的聊天会话ID
-  // 在useChat中通过id参数传递
-  if (!newBody.id) {
-    return NextResponse.json(
-      { error: '缺少聊天会话ID' },
-      { status: 400 }
-    );
-  }
-  
-  // 将session_id重命名为id，以便后端使用
-  newBody.session_id = newBody.id;
-  const newBodyStr = JSON.stringify(newBody)
-
   // 后端 SSE 接口地址
   const backendUrl = process.env.BACKENDURL ? process.env.BACKENDURL : 'http://127.0.0.1:8000/api/chat';
 
   // 转发到后端
-  const backendResponse = await fetch(backendUrl, {
+  const backendResponse = await fetch(`${backendUrl}?user_id=${currentUser.id}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       // 转发鉴权信息（如果有）
       'Authorization': req.headers.get('authorization') || '',
     },
-    body: newBodyStr,
+    body: body,
   });
 
   if (!backendResponse.body) {

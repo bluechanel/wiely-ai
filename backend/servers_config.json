@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "gas": {
+      "type": "streamable-http",
+      "url": "http://localhost:3001/mcp",
+      "note": "For Streamable HTTP connections, add this URL directly in your MCP Client"
+    },
+    "tavily-remote": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://mcp.tavily.com/mcp/?tavilyApiKey=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"
+      ]
+    }
+  }
+}
