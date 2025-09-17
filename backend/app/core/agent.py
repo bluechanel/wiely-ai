@@ -123,6 +123,20 @@ class ChatAgent:
 
                 # 执行工具调用
                 response = await target_server.execute_tool(tool_name, args)
+
+                # 此处工具执行进度的展示 ，需要在服务端 使用 如下代码
+
+                # await ctx.report_progress(
+                #             progress=progress,
+                #             total=1.0,
+                #             message=f"Step {i + 1}/{steps}",
+                #         )
+                if isinstance(response, dict) and "progress" in response:
+                    progress = response["progress"]
+                    total = response["total"]
+                    percentage = (progress / total) * 100
+                    logger.info(f"Tool Run Progress: {progress}/{total} ({percentage:.1f}%)")
+
                 logger.info(f"工具执行结果: {response}")
                 result = ""
                 for content in response.content:
@@ -169,7 +183,7 @@ class ChatAgent:
             RuntimeError: 如果MCP客户端未初始化或处理过程中出错
         """
         # 添加用户消息到历史
-        self.messages.append({"role": "user", "content": user_message})
+        self.messages.append({"role": "user", "content": "/no_think" + user_message})
         
         # 限制历史消息数量
         if len(self.messages) > self.max_history * 2:  # 因为每次对话有用户和助手两条消息

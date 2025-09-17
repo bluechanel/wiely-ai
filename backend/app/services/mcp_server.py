@@ -3,12 +3,13 @@ import os
 import shutil
 from contextlib import AsyncExitStack
 from datetime import timedelta
-from typing import Any, List
+from typing import Any, List, Coroutine
 
 from loguru import logger
 from mcp import Tool, ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import CallToolResult
 
 
 class Server:
@@ -28,7 +29,6 @@ class Server:
         self._cleanup_lock: asyncio.Lock = asyncio.Lock()
         self.exit_stack: AsyncExitStack = AsyncExitStack()
         self._tools_cache: List[Tool] | None = None
-        self._last_tools_fetch: float = 0
 
     async def initialize(self) -> None:
         """初始化所有 MCP Server"""
@@ -85,11 +85,9 @@ class Server:
         Raises:
             RuntimeError: 如果服务器未初始化
         """
-        import time
-        current_time = time.time()
         
         # 使用缓存的工具列表，如果存在且未过期（10秒内）
-        if self._tools_cache is not None and (current_time - self._last_tools_fetch) < 10:
+        if self._tools_cache is not None:
             return self._tools_cache
             
         if not self.session:
@@ -98,7 +96,6 @@ class Server:
         try:
             tools_response = await self.session.list_tools()
             self._tools_cache = tools_response.tools
-            self._last_tools_fetch = current_time
             return self._tools_cache
         except Exception as e:
             logger.error(f"获取工具列表失败: {e}")
@@ -110,7 +107,7 @@ class Server:
         arguments: dict[str, Any],
         retries: int = 2,
         delay: float = 1.0,
-    ) -> Any:
+    ) -> CallToolResult | None:
         """执行工具并具有重试机制。
 
         Args:
