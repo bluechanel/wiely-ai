@@ -1,13 +1,28 @@
 """聊天API路由模块。"""
 import json
 import uuid
-from typing import Dict, AsyncGenerator
+from typing import Dict, AsyncGenerator, List, Annotated
 
-from fastapi import APIRouter, Request, Query, Depends
+from fastapi import APIRouter, Query, Depends, Body
 from fastapi.responses import StreamingResponse
 from loguru import logger
+from pydantic import BaseModel
 
 from app.core.agent import ChatAgent
+
+class MessagePart(BaseModel):
+    type: str
+    text: str
+
+class RequestMessage(BaseModel):
+    id: str
+    role: str
+    parts: List[MessagePart]
+
+class RequestBody(BaseModel):
+    id: str
+    messages:List[RequestMessage]
+    trigger: str
 
 # 定义SSE事件前缀
 DATA_PREFIX = "data: "
@@ -19,42 +34,44 @@ class AgentManager:
         """初始化AgentManager。"""
         self.agents: Dict[str, ChatAgent] = {}
 
-    async def get_agent(self, user_id: str) -> ChatAgent:
+    async def get_agent(self, user_id: str, chat_id: str) -> ChatAgent:
         """获取或创建用户的ChatAgent实例。
         
         Args:
             user_id: 用户ID
-            
+            chat_id: 对话id
         Returns:
             ChatAgent实例
         """
-        if user_id not in self.agents:
-            agent = ChatAgent(user_id)
+        if chat_id not in self.agents:
+            logger.debug(f"对话: {chat_id} 不存在Agent。")
+            agent = ChatAgent(user_id=user_id,chat_id=chat_id)
             await agent.connect()
-            self.agents[user_id] = agent
-        return self.agents[user_id]
+            self.agents[chat_id] = agent
+            logger.debug(f"对话: {chat_id} Agent已创建。")
+        return self.agents[chat_id]
 
 
 # 创建单例管理器
 manager = AgentManager()
 
 
-async def get_agent(user_id: str = Query(...)) -> ChatAgent:
+async def get_agent(body: Annotated[RequestBody, Body(title="消息体")],
+                    user_id: Annotated[str, Query(title="用户拆")]) -> ChatAgent:
     """根据user_id返回ChatAgent实例（依赖注入）。
     
     Args:
         user_id: 用户ID
+        body: 请求体
         
     Returns:
         ChatAgent实例
     """
-    return await manager.get_agent(user_id)
+    return await manager.get_agent(user_id, body.id)
 
 
 # 创建路由器
 router = APIRouter(prefix="/chat")
-
-
 
 
 async def event_generator(agent: ChatAgent, user_message: str) -> AsyncGenerator[str, None]:
@@ -85,32 +102,22 @@ async def event_generator(agent: ChatAgent, user_message: str) -> AsyncGenerator
 
 
 @router.post("/")
-async def chat(request: Request, agent: ChatAgent = Depends(get_agent)) -> StreamingResponse:
+async def chat(body: RequestBody, agent: Annotated[ChatAgent, Depends(get_agent)], user_id: Annotated[str, Query(title="用户id")]) -> StreamingResponse:
     """处理聊天请求。
     
     Args:
-        request: FastAPI请求对象
+        body: FastAPI请求对象
+        user_id
         agent: ChatAgent实例（通过依赖注入）
         
     Returns:
         流式响应
     """
     try:
-        # 解析请求数据
-        data = await request.json()
-        messages = data.get("messages", [])
-
+        logger.debug(body.model_dump_json())
+        user_content = body.messages[-1].parts[0].text
         # 获取最后一条消息
-        if not messages:
-            return StreamingResponse(
-                event_generator(agent, "请提供消息内容"),
-                media_type="text/event-stream"
-            )
-
-        last_message = messages[-1]
-        content = last_message.get("parts", [{}])[0].get("text", "")
-
-        if not content:
+        if not user_content:
             return StreamingResponse(
                 event_generator(agent, "请提供消息内容"),
                 media_type="text/event-stream"
@@ -118,11 +125,11 @@ async def chat(request: Request, agent: ChatAgent = Depends(get_agent)) -> Strea
 
         # 返回流式响应
         return StreamingResponse(
-            event_generator(agent, content),
+            event_generator(agent, user_content),
             media_type="text/event-stream"
         )
     except Exception as e:
-        logger.error(f"处理聊天请求时出错: {e}")
+        logger.error(f"处理聊天请求时出错: {str(e)}")
         # 返回错误响应
         async def error_generator():
             message_id = str(uuid.uuid4())

@@ -121,7 +121,6 @@ class LLMClient:
             try:
                 # 记录请求信息
                 logger.debug(f"发送请求到LLM，模型: {model}, 工具数量: {len(self.openai_tools) if self.openai_tools else 0}")
-                logger.debug(self.openai_tools)
                 async with self.openai_client.chat.completions.stream(
                     model=model,
                     messages=messages,

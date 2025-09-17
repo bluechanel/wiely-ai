@@ -21,7 +21,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 const initialMessages: UIMessage[] = [
   {
-    id: '1',
+    id: 'str',
     role: 'assistant',
     parts: [
       {

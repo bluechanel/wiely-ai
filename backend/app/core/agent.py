@@ -1,5 +1,6 @@
 """ChatAgent模块负责管理用户对话和与MCP服务的交互。"""
 import asyncio
+import copy
 import json
 import os
 import uuid
@@ -7,11 +8,11 @@ from typing import List, Dict, Any, AsyncGenerator
 
 from loguru import logger
 from openai.types.chat import ParsedFunctionToolCall, ParsedChatCompletion
+from mem0 import AsyncMemoryClient
 
 from app.config.configuration import Configuration
 from app.services.mcp_server import Server
 from app.services.llm_client import LLMClient
-
 # 定义SSE事件前缀
 DATA_PREFIX = "data: "
 
@@ -22,18 +23,20 @@ class ChatAgent:
     和与MCP服务的交互。
     """
 
-    def __init__(self, chat_id: str, max_history: int = 20):
+    def __init__(self, user_id: str, chat_id: str, max_history: int = 20):
         """初始化ChatAgent。
         
         Args:
             chat_id: 对话ID，通常是用户ID
             max_history: 最大保留的对话历史条数，默认为20
         """
-        self.chat_id = chat_id  # 对话id
+        self.user_id = user_id  # 用户id
+        self.chat_id = chat_id  # 当前对话id
         self.messages: List[Dict[str, str]] = []  # 对话历史
         self.servers: List[Server] = []
         self.max_history = max_history
-        self.llm_client = None
+        self.llm_client: LLMClient | None = None
+        self.mem0_client: AsyncMemoryClient | None = None
         self.config_path = os.getenv("MCP_CONFIG_PATH", "servers_config.json")
 
     async def init_mcp_client(self) -> None:
@@ -73,6 +76,9 @@ class ChatAgent:
     async def init_llm_client(self) -> None:
         # 创建LLM客户端话
         self.llm_client = await LLMClient.create(self.servers)
+
+    async def init_mem0_client(self) -> None:
+        self.mem0_client = AsyncMemoryClient(api_key = os.getenv("MEM0_API_KEY", "123456"))
 
     async def cleanup_servers(self) -> None:
         """正确清理所有服务器。"""
@@ -182,12 +188,28 @@ class ChatAgent:
         Raises:
             RuntimeError: 如果MCP客户端未初始化或处理过程中出错
         """
-        # 添加用户消息到历史
-        self.messages.append({"role": "user", "content": "/no_think" + user_message})
-        
-        # 限制历史消息数量
+        # todo 滑动窗口 限制历史消息数量,存入数据库 重新查找
         if len(self.messages) > self.max_history * 2:  # 因为每次对话有用户和助手两条消息
             self.messages = self.messages[-self.max_history*2:]
+
+        # 短期对话历史记忆
+        messages = copy.deepcopy(self.messages)
+
+        # 添加用户消息到历史
+        self.messages.append({"role": "user", "content": user_message})
+        # 查询用户记忆并添加到 短期对话历史 中
+        search_memory = await self.mem0_client.search(user_message, version="v2", filters={
+            "AND":[
+                {
+                    "user_id":self.user_id
+                }
+            ]
+        })
+        memory = "之前对话中的相关信息：\n"
+        for m in search_memory:
+            memory += f"- {m.get('memory', '')} \n"
+        messages.append({"role": "user", "content": "/no_think \n" + memory + user_message})
+        logger.debug(f"任务级messages：{json.dumps(messages, ensure_ascii=False)}")
 
         async def run(tool_call_count: int = 0, max_tools: int = 5) -> AsyncGenerator[
             str | dict[str, str | dict[str, str]] | Any, Any]:
@@ -204,12 +226,9 @@ class ChatAgent:
             if tool_call_count >= max_tools:
                 yield f"已达到最大工具调用次数限制({max_tools}次)"
 
-            # 增加工具调用计数
-            tool_call_count += 1
-
             try:
                 message_id = None
-                async for event in self.llm_client.get_response(self.messages):
+                async for event in self.llm_client.get_response(messages):
                     if isinstance(event, str):
                         if message_id is None:
                             message_id = str(uuid.uuid4())
@@ -223,7 +242,9 @@ class ChatAgent:
 
                         choice = event.choices[0]
                         if choice.finish_reason == "tool_calls":
-                            # 返回工具调用信息
+                            # 增加工具调用计数
+                            tool_call_count += 1
+                            # 发送工具调用信息
                             for tool_call in choice.message.tool_calls:
                                 # 开始调用工具
                                 chunk = {
@@ -248,13 +269,15 @@ class ChatAgent:
                                     }
                                 }
                                 yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
-                                self.messages.append({"role":"tool", "content": result["tool_result"]})
-                            logger.debug(self.messages)
+                                messages.append({"role":"tool", "content": result["tool_result"]})
+                            logger.debug(messages)
                             # 如果是工具响应，继续递归调用
                             await asyncio.sleep(0.1) # 添加短暂延迟，避免过快的递归调用
                             async for message in run(tool_call_count, max_tools):
                                 yield message
                         else:
+                            # 本次对话信息 存入 记忆
+                            await self.mem0_client.add(messages, user_id=self.user_id, output_format="v1.1") # 支持传入 agent_id user_id app_id run_id, async_mode 可异步添加记忆
                             # 此处将最终的答案填充到消息列表中
                             self.messages.append({"role": "assistant", "content": choice.message.content})
                 return
@@ -267,6 +290,7 @@ class ChatAgent:
         """连接到MCP服务。"""
         await self.init_mcp_client()
         await self.init_llm_client()
+        await self.init_mem0_client()
 
     async def close(self) -> None:
         """关闭连接并清理资源。"""
@@ -276,7 +300,7 @@ class ChatAgent:
         except Exception as e:
             logger.error(f"清理ChatAgent资源时出错: {e}")
                 
-    def get_history(self) -> List[Dict[str, str]]:
+    async def get_history(self) -> List[Dict[str, str]]:
         """获取对话历史。
         
         Returns:
@@ -284,23 +308,11 @@ class ChatAgent:
         """
         return self.messages
         
-    def clear_history(self) -> None:
+    async def clear_history(self) -> None:
         """清除对话历史。"""
         self.messages = []
         logger.info(f"用户 {self.chat_id} 的对话历史已清除")
-        
-    def add_system_message(self, content: str) -> None:
-        """添加系统消息到对话历史。
-        
-        Args:
-            content: 系统消息内容
-        """
-        # 如果第一条消息已经是系统消息，则替换它
-        if self.messages and self.messages[0].get("role") == "system":
-            self.messages[0] = {"role": "system", "content": content}
-        else:
-            # 否则在开头插入系统消息
-            self.messages.insert(0, {"role": "system", "content": content})
+
             
     async def reconnect(self) -> bool:
         """重新连接MCP服务。
