@@ -13,23 +13,12 @@ import { WeatherPart } from '@/components/custom-weather'
 import { DefaultChatTransport } from 'ai'
 import { WikiPart } from '../components/custom-wiki'
 import { useState, useEffect } from 'react'
-import Navbar from '@/components/navbar'
 import { useSession } from 'next-auth/react'
-import ChatSidebar from '@/components/chat/chat-sidebar'
-import ChatHeader from '@/components/chat/chat-header'
+import MainLayout from '@/components/layout/main-layout'
 import { v4 as uuidv4 } from 'uuid'
+import Link from 'next/link'
 
 const initialMessages: UIMessage[] = [
-  {
-    id: 'str',
-    role: 'assistant',
-    parts: [
-      {
-        type: 'text',
-        text: 'Hello! How can I help you today?',
-      },
-    ],
-  },
 ]
 
 export default function Page(){
@@ -52,38 +41,63 @@ export default function Page(){
 
   // 创建新聊天的处理函数
   const handleNewChat = () => {
-    // 重置聊天状态，但保持相同的chatId
-    window.location.reload();
+    // 生成新的聊天ID
+    const newChatId = uuidv4();
+    setChatId(newChatId);
+    // 清除本地存储的消息历史
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(`chat-${newChatId}`);
+      localStorage.setItem('lastChatId', newChatId);
+    }
   };
 
-  return (
-    <div className="flex h-screen flex-col">
-      <Navbar />
-      <header className="w-full border-b p-4 text-center">
-        <h1 className="text-2xl font-bold">
-          Wiley AI - 智能助手
-        </h1>
-        <p className="text-gray-600">
-          {session ? `欢迎回来，${session.user?.email}` : '请登录以获得完整体验'}
-        </p>
-      </header>
-      <div className="min-h-0 flex-1 flex">
-        {session && (
-          <ChatSidebar 
-            currentChatId={chatId} 
-            onSelectChat={setChatId} 
-            onNewChat={handleNewChat}
-          />
-        )}
-        <div className="flex-1">
-          <ChatExample sessionId={chatId} />
+  // 如果用户未登录，显示登录界面
+  if (!session) {
+    return (
+      <div className="h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex flex-col items-center justify-center transition-all duration-300">
+        <div className="max-w-md w-full mx-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 text-center transition-all duration-300">
+            <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl mx-auto mb-6">
+              W
+            </div>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+              欢迎使用 Wiley AI
+            </h1>
+            <p className="text-gray-600 dark:text-gray-300 mb-8">
+              智能助手，随时为您提供帮助
+            </p>
+            <div className="space-y-3">
+              <Link href="/login" className="block">
+                <button className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 text-white py-3 px-6 rounded-lg font-semibold hover:from-blue-600 hover:to-indigo-700 transition-all">
+                  登录
+                </button>
+              </Link>
+              <Link href="/register" className="block">
+                <button className="w-full border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 py-3 px-6 rounded-lg font-semibold hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all">
+                  注册账号
+                </button>
+              </Link>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+    )
+  }
+
+  return (
+    <>
+      <MainLayout 
+        currentChatId={chatId} 
+        onSelectChat={setChatId} 
+        onNewChat={handleNewChat}
+      >
+        <Chat sessionId={chatId} />
+      </MainLayout>
+    </>
   )
 }
 
-function ChatExample({sessionId}: {sessionId: string}) {
+function Chat({sessionId}: {sessionId: string}) {
   const handler = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
@@ -91,37 +105,51 @@ function ChatExample({sessionId}: {sessionId: string}) {
     messages: initialMessages,
     id: sessionId,
   })
-
+  
   return (
-    <ChatSection
-      handler={handler}
-      className="block h-full flex-row gap-4 p-0 md:flex md:p-5"
-    >
-      <div className="md:max-w-1/2 mx-auto flex h-full min-w-0 max-w-full flex-1 flex-col gap-4">
-        <div className="sticky top-0 bg-white z-10">
-          <ChatHeader chatId={sessionId} />
+    <div className="h-full flex flex-col duration-300">
+      <ChatSection
+        handler={handler}
+        className="h-full flex flex-col"
+      >
+        <div className="flex-1 flex flex-col min-h-0">
+          <ChatMessages className="flex-1">
+            <ChatMessages.List className="px-4 py-6 max-w-4xl mx-auto w-full">
+              <CustomChatMessages />
+            </ChatMessages.List>
+          </ChatMessages>
+          <div className="p-4">
+            <div className="max-w-4xl mx-auto">
+              <ChatInput>
+                <ChatInput.Form>
+                  <ChatInput.Field placeholder="Type your message..." />
+                  <ChatInput.Submit />
+                </ChatInput.Form>
+              </ChatInput>
+            </div>
+          </div>
         </div>
-        <ChatMessages>
-          <ChatMessages.List className="px-4 py-6">
-            <CustomChatMessages />
-          </ChatMessages.List>
-        </ChatMessages>
-        <div className="border-t p-4">
-          <ChatInput>
-            <ChatInput.Form>
-              <ChatInput.Field placeholder="输入消息..." />
-              <ChatInput.Submit />
-            </ChatInput.Form>
-          </ChatInput>
-        </div>
-      </div>
-      <ChatCanvas className="w-full md:w-2/3" />
-    </ChatSection>
+        <ChatCanvas className="hidden" />
+      </ChatSection>
+    </div>
   )
 }
 
 function CustomChatMessages() {
   const { messages } = useChatUI()
+
+  if (messages.length === 0) {
+    return (
+      <div className="flex h-full flex-col justify-center pt-4 ">
+        <h1 className="mb-2 text-3xl font-bold">
+          Hello there!
+        </h1>
+        <h1 className="text-xl">
+          I'm here to help you with your questions.
+        </h1>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -132,16 +160,9 @@ function CustomChatMessages() {
           isLast={index === messages.length - 1}
           className="mb-4"
         >
-          <ChatMessage.Avatar>
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500 text-sm font-semibold text-white">
-              {message.role === 'user' ? 'U' : 'AI'}
-            </div>
-          </ChatMessage.Avatar>
           <ChatMessage.Content>
             <ChatMessage.Part.File />
-            <div className="prose">
-              <ChatMessage.Part.Event />
-            </div>
+            <ChatMessage.Part.Event />
             <ChatMessage.Part.Markdown />
             <ChatMessage.Part.Artifact />
             <ChatMessage.Part.Source />

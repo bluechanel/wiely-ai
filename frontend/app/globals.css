@@ -1,9 +1,9 @@
 @import 'tailwindcss';
 @plugin "@tailwindcss/typography";
 
-@source '../node_modules/@llamaindex/chat-ui/**/*.{ts,tsx}';
+@source '../node_modules/@llamaindex/chat-ui*.{ts,tsx}';
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 @theme {
   --color-border: hsl(var(--border));
@@ -246,9 +246,4 @@
   body {
     @apply bg-background text-foreground antialiased;
   }
-}
-
-.prose pre,
-.prose pre code {
-  color: black !important;
 }

@@ -116,6 +116,7 @@ class LLMClient:
         """
         retry_count = 0
         model = model or os.getenv("LLM_MODEL", "qwen3_32")
+        logger.debug(messages)
         
         while retry_count < self.max_retries:
             try:

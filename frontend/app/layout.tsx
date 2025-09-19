@@ -5,12 +5,13 @@ import '@llamaindex/chat-ui/styles/editor.css'
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import AuthContext from './context/AuthContext'
+import { ThemeProvider } from 'next-themes'
 
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'LlamaIndex Chat UI - Next.js Example',
-  description: 'A simple Next.js application using @llamaindex/chat-ui',
+  title: 'Wiley AI',
+  description: 'A Chat AI',
 }
 
 export default function RootLayout({
@@ -19,11 +20,13 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>
-        <AuthContext>
-          {children}
-        </AuthContext>
+    <html lang="en" suppressHydrationWarning>
+      <body>
+        <ThemeProvider>
+          <AuthContext>
+            {children}
+          </AuthContext>
+        </ThemeProvider>
       </body>
     </html>
   )

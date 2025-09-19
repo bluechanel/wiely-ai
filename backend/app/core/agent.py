@@ -98,20 +98,20 @@ class ChatAgent:
         Returns:
             处理后的响应字典
         """
-        tool_id = tool_call.id
+        tool_call_id = tool_call.id
         tool_call = tool_call.function
-        tool_name = tool_call.name
-        tool_args = tool_call.arguments
+        tool_call_name = tool_call.name
+        tool_call_args = tool_call.arguments
 
 
-        logger.info(f"执行工具: {tool_name}, 参数: {tool_args}")
+        logger.info(f"执行工具: {tool_call_name}, 参数: {tool_call_args}")
 
         # 查找可以处理该工具的服务器
         target_server = None
         for server in self.servers:
             try:
                 tools = await server.list_tools()
-                if any(tool.name == tool_name for tool in tools):
+                if any(tool.name == tool_call_name for tool in tools):
                     target_server = server
                     break
             except Exception as e:
@@ -122,13 +122,13 @@ class ChatAgent:
             try:
                 # 解析工具参数
                 try:
-                    args = json.loads(tool_args)
+                    args = json.loads(tool_call_args)
                 except json.JSONDecodeError as e:
                     logger.error(f"解析工具参数失败: {e}")
                     raise Exception("工具参数无法被解析")
 
                 # 执行工具调用
-                response = await target_server.execute_tool(tool_name, args)
+                response = await target_server.execute_tool(tool_call_name, args)
 
                 # 此处工具执行进度的展示 ，需要在服务端 使用 如下代码
 
@@ -149,19 +149,19 @@ class ChatAgent:
                     if content.type == "text":
                         result += content.text
                     else:
-                        logger.error(f"工具{tool_name},返回的结果type为{content.type}, 原始结果为{response}")
+                        logger.error(f"工具{tool_call_name},返回的结果type为{content.type}, 原始结果为{response}")
                 return {
-                    "tool_id": tool_id,
-                    "tool_name": tool_name,
-                    "tool_args": tool_args,
-                    "tool_result": result
+                    "tool_call_id": tool_call_id,
+                    "tool_call_name": tool_call_name,
+                    "tool_call_args": tool_call_args,
+                    "tool_call_result": result
                 }
             except Exception as e:
-                error_msg = f"执行工具 {tool_name} 时出错: {str(e)}"
+                error_msg = f"执行工具 {tool_call_name} 时出错: {str(e)}"
                 logger.error(error_msg)
                 raise Exception(f"执行工具时出错: {str(e)}")
         else:
-            error_msg = f"找不到可以处理工具 {tool_name} 的服务器"
+            error_msg = f"找不到可以处理工具 {tool_call_name} 的服务器"
             logger.error(error_msg)
             raise Exception(error_msg)
 
@@ -209,7 +209,6 @@ class ChatAgent:
         for m in search_memory:
             memory += f"- {m.get('memory', '')} \n"
         messages.append({"role": "user", "content": "/no_think \n" + memory + user_message})
-        logger.debug(f"任务级messages：{json.dumps(messages, ensure_ascii=False)}")
 
         async def run(tool_call_count: int = 0, max_tools: int = 5) -> AsyncGenerator[
             str | dict[str, str | dict[str, str]] | Any, Any]:
@@ -225,65 +224,65 @@ class ChatAgent:
             # 检查工具调用次数是否超过限制
             if tool_call_count >= max_tools:
                 yield f"已达到最大工具调用次数限制({max_tools}次)"
+            message_id = None
+            async for event in self.llm_client.get_response(messages):
+                if isinstance(event, str):
+                    if message_id is None:
+                        message_id = str(uuid.uuid4())
+                        yield f"{DATA_PREFIX}{json.dumps({'id': message_id, 'type': 'text-start'})}\n\n"
+                    delta_chunk = {"id": message_id, "type": "text-delta", "delta": event}
+                    yield f"{DATA_PREFIX}{json.dumps(delta_chunk)}\n\n"
+                if isinstance(event, ParsedChatCompletion):
+                    logger.debug(event)
+                    if message_id:
+                        yield f"{DATA_PREFIX}{json.dumps({'id': message_id, 'type': 'text-end'})}\n\n"
+                        message_id = None
 
-            try:
-                message_id = None
-                async for event in self.llm_client.get_response(messages):
-                    if isinstance(event, str):
-                        if message_id is None:
-                            message_id = str(uuid.uuid4())
-                            yield f"{DATA_PREFIX}{json.dumps({'id': message_id, 'type': 'text-start'})}\n\n"
-                        delta_chunk = {"id": message_id, "type": "text-delta", "delta": event}
-                        yield f"{DATA_PREFIX}{json.dumps(delta_chunk)}\n\n"
-                    if isinstance(event, ParsedChatCompletion):
-                        if message_id:
-                            yield f"{DATA_PREFIX}{json.dumps({'id': message_id, 'type': 'text-end'})}\n\n"
-                            message_id = None
-
-                        choice = event.choices[0]
-                        if choice.finish_reason == "tool_calls":
-                            # 增加工具调用计数
-                            tool_call_count += 1
-                            # 发送工具调用信息
-                            for tool_call in choice.message.tool_calls:
-                                # 开始调用工具
-                                chunk = {
-                                    "id": tool_call.id,
-                                    "type": f"data-event",  # Add data- prefix
-                                    "data": {
-                                        "title": "调用工具执行",
-                                        "status": "pending"
-                                    }
+                    choice = event.choices[0]
+                    if choice.finish_reason == "tool_calls":
+                        # 添加工具消息
+                        messages.append({
+                                "role": "assistant",
+                                "tool_calls": choice.message.tool_calls
+                            })
+                        # 增加工具调用计数
+                        tool_call_count += 1
+                        # 发送工具调用信息
+                        for tool_call in choice.message.tool_calls:
+                            # 回复调用工具
+                            chunk = {
+                                "id": tool_call.id,
+                                "type": f"data-event",  # Add data- prefix
+                                "data": {
+                                    "title": "调用工具执行",
+                                    "status": "pending"
                                 }
-                                yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
-                            # 并行调用工具
-                            async for result in self.run_all_tools(tool_calls=choice.message.tool_calls):
-                                # 发送工具调用结果
-                                chunk = {
-                                    "id": result["tool_id"],
-                                    "type": f"data-event",  # Add data- prefix
-                                    "data": {
-                                        "title": "工具调用完成",
-                                        "status": "success",
-                                        "data": {"result": result["tool_result"]}
-                                    }
+                            }
+                            yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
+                        # 并行调用工具
+                        async for result in self.run_all_tools(tool_calls=choice.message.tool_calls):
+                            # 发送工具调用结果
+                            chunk = {
+                                "id": result["tool_call_id"],
+                                "type": f"data-event",  # Add data- prefix
+                                "data": {
+                                    "title": "工具调用完成",
+                                    "status": "success",
+                                    "data": {"result": result["tool_call_result"]}
                                 }
-                                yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
-                                messages.append({"role":"tool", "content": result["tool_result"]})
-                            logger.debug(messages)
-                            # 如果是工具响应，继续递归调用
-                            await asyncio.sleep(0.1) # 添加短暂延迟，避免过快的递归调用
-                            async for message in run(tool_call_count, max_tools):
-                                yield message
-                        else:
-                            # 本次对话信息 存入 记忆
-                            await self.mem0_client.add(messages, user_id=self.user_id, output_format="v1.1") # 支持传入 agent_id user_id app_id run_id, async_mode 可异步添加记忆
-                            # 此处将最终的答案填充到消息列表中
-                            self.messages.append({"role": "assistant", "content": choice.message.content})
-                return
-            except Exception as e:
-                logger.error(f"运行聊天会话时出错: {e}")
-                yield f"处理您的请求时出现错误: {str(e)}"
+                            }
+                            yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
+                            messages.append({"role":"tool", "tool_call_id": result["tool_call_id"], "content": result["tool_call_result"]})
+                        # 如果是工具响应，继续递归调用
+                        await asyncio.sleep(0.1) # 添加短暂延迟，避免过快的递归调用
+                        async for message in run(tool_call_count, max_tools):
+                            yield message
+                    else:
+                        # 此处将最终的答案填充到消息列表中
+                        self.messages.append({"role": "assistant", "content": choice.message.content})
+                        # 本次对话信息 存入 记忆
+                        await self.mem0_client.add(self.messages, user_id=self.user_id, output_format="v1.1") # 支持传入 agent_id user_id app_id run_id, async_mode 可异步添加记忆
+            return
         return run()
 
     async def connect(self) -> None:

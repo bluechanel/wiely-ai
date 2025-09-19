@@ -84,6 +84,9 @@ async def event_generator(agent: ChatAgent, user_message: str) -> AsyncGenerator
     Yields:
         SSE格式的事件数据
     """
+    # answer = await agent.ask(user_message)
+    # async for item in answer:
+    #     yield item
     try:
         # 获取回复
         answer = await agent.ask(user_message)
