@@ -1,17 +1,23 @@
-import os
 import asyncio
-from typing import Any, List, Dict, TypedDict, AsyncGenerator
+import os
+from typing import Any, TypedDict
+from collections.abc import AsyncGenerator
+from openai import AsyncOpenAI, APIError, Timeout, APIConnectionError
+from openai.types.chat import ChatCompletionFunctionToolParam
+
+from mcp import Tool
+
 
 from loguru import logger
-from openai import AsyncOpenAI
 
 from app.services.mcp_server import Server
 
 
 class ToolDefinition(TypedDict):
     """工具定义的类型。"""
+
     type: str
-    function: Dict[str, Any]
+    function: dict[str, Any]
 
 
 class LLMClient:
@@ -19,21 +25,21 @@ class LLMClient:
 
     def __init__(self, servers: list[Server], timeout: int = 60, max_retries: int = 3):
         """初始化LLM客户端。
-        
+
         Args:
             servers: MCP服务器列表
             timeout: API请求超时时间（秒）
             max_retries: 最大重试次数
         """
-        self.mcp_servers = servers
-        self.openai_tools = None
-        self.timeout = timeout
-        self.max_retries = max_retries
-        self.openai_client = self._init_openai_client()
-        
+        self.mcp_servers: list[Server] = servers
+        self.openai_tools: list[NotGiven] | None = None
+        self.timeout: int = timeout
+        self.max_retries: int = max_retries
+        self.openai_client: AsyncOpenAI = self._init_openai_client()
+
     def _init_openai_client(self) -> AsyncOpenAI:
         """初始化OpenAI客户端。
-        
+
         Returns:
             OpenAI客户端实例
         """
@@ -44,10 +50,10 @@ class LLMClient:
     @classmethod
     async def create(cls, servers: list[Server]):
         """工厂方法，构造时就缓存 tools
-        
+
         Args:
             servers: MCP服务器列表
-            
+
         Returns:
             LLMClient实例
         """
@@ -56,13 +62,13 @@ class LLMClient:
         logger.info(f"已加载OpenAI工具: {len(self.openai_tools)}个")
         return self
 
-    async def convert_mcp_to_openai_tools(self) -> List[ToolDefinition]:
+    async def convert_mcp_to_openai_tools(self) -> list[ToolDefinition]:
         """将MCP Server返回的工具列表转换为OpenAI函数调用格式
-        
+
         Returns:
             OpenAI工具列表
         """
-        all_tools = []
+        all_tools: list[Tool] = []
         for server in self.mcp_servers:
             try:
                 tools = await server.list_tools()
@@ -70,7 +76,7 @@ class LLMClient:
             except Exception as e:
                 logger.error(f"从服务器获取工具列表失败: {e}")
 
-        openai_tools: List[ToolDefinition] = []
+        openai_tools: list[ToolDefinition] = []
 
         for tool in all_tools:
             try:
@@ -80,17 +86,17 @@ class LLMClient:
                         "name": tool.name,
                         "description": tool.description,
                         "parameters": {},
-                        "strict": True
-                    }
+                        "strict": True,
+                    },
                 }
 
                 input_schema = tool.inputSchema
 
-                parameters = {
-                    "type": input_schema['type'],
-                    "properties": input_schema['properties'],
-                    "required": input_schema['required'],
-                    "additionalProperties": False
+                parameters: dict[str, Any] = {
+                    "type": input_schema.get("type", None),
+                    "properties": input_schema.get("properties", {}),
+                    "required": input_schema.get("required", None),
+                    "additionalProperties": False,
                 }
                 for prop in parameters["properties"].values():
                     # 特殊处理枚举值
@@ -101,10 +107,12 @@ class LLMClient:
                 openai_tools.append(tool_schema)
             except Exception as e:
                 logger.warning(f"转换工具定义失败: {e}")
-                
+
         return openai_tools
 
-    async def get_response(self, messages: list[dict[str, str]], model: str = None) -> AsyncGenerator[Any, Any]:
+    async def get_response(
+        self, messages: list[dict[str, str]], model: str
+    ) -> AsyncGenerator[Any, Any]:
         """从LLM获取响应。
 
         Args:
@@ -117,11 +125,13 @@ class LLMClient:
         retry_count = 0
         model = model or os.getenv("LLM_MODEL", "qwen3_32")
         logger.debug(messages)
-        
+
         while retry_count < self.max_retries:
             try:
                 # 记录请求信息
-                logger.debug(f"发送请求到LLM，模型: {model}, 工具数量: {len(self.openai_tools) if self.openai_tools else 0}")
+                logger.debug(
+                    f"发送请求到LLM，模型: {model}, 工具数量: {len(self.openai_tools) if self.openai_tools else 0}"
+                )
                 async with self.openai_client.chat.completions.stream(
                     model=model,
                     messages=messages,
@@ -135,13 +145,15 @@ class LLMClient:
                     yield await stream.get_final_completion()
                 return
 
-            except Exception as e:
+            except (APIError, Timeout, APIConnectionError) as e:
                 last_error = e
                 retry_count += 1
-                wait_time = 2 ** retry_count  # 指数退避策略
-                
-                logger.warning(f"获取LLM响应失败 (尝试 {retry_count}/{self.max_retries}): {e}")
-                
+                wait_time = 2**retry_count  # 指数退避策略
+
+                logger.warning(
+                    f"获取LLM响应失败 (尝试 {retry_count}/{self.max_retries}): {e}"
+                )
+
                 if retry_count < self.max_retries:
                     logger.info(f"等待 {wait_time} 秒后重试...")
                     await asyncio.sleep(wait_time)

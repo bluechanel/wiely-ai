@@ -1,6 +1,6 @@
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 
 from app.api import chat_router
 from app.utils.logging import setup_logging
@@ -13,9 +13,7 @@ setup_logging()
 
 # 创建FastAPI应用
 app = FastAPI(
-    title="Wiley AI Backend",
-    description="Wiley AI聊天后端API",
-    version="1.0.0"
+    title="Wiley AI Backend", description="Wiley AI聊天后端API", version="1.0.0"
 )
 
 # 添加CORS中间件
@@ -29,6 +27,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(chat_router, prefix="/api")
+
 
 # 健康检查端点
 @app.get("/health")

@@ -1,57 +1,76 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import {NextRequest} from 'next/server';
 
+// Default user ID and conversation ID for the application
+const DEFAULT_USER_ID = 'default-user';
+const DEFAULT_CONVERSATION_ID = 'default-conversation';
+
+/**
+ * POST handler for chat API that proxies requests to the backend.
+ * Automatically adds default user_id and conversation_id to prevent backend errors.
+ * @param req - Next.js request object
+ * @returns Streaming response from backend
+ */
 export async function POST(req: NextRequest) {
-  // 校验用户登录，获取用户id
-  const currentUser = await getCurrentUser();
-  
-  // 如果用户未登录，返回401错误
-  if (!currentUser) {
-    return NextResponse.json(
-      { error: '用户未登录，请先登录' },
-      { status: 401 }
-    );
+  try {
+    // Read request body from frontend
+    const bodyText = await req.text();
+    let body: any = {};
+
+    try {
+      body = JSON.parse(bodyText);
+    } catch (e) {
+      console.error('Failed to parse request body:', e);
+    }
+
+    // Add default user_id and conversation_id if not present
+    const requestBody = {
+      ...body,
+      user_id: body.user_id || DEFAULT_USER_ID,
+      conversation_id: body.conversation_id || DEFAULT_CONVERSATION_ID,
+    };
+
+    // Backend SSE API endpoint
+    const backendUrl = process.env.BACKENDURL || 'http://127.0.0.1:8000/api/chat';
+
+    // Build URL with user_id query parameter
+    const url = new URL(backendUrl);
+    url.searchParams.set('user_id', requestBody.user_id);
+
+    // Forward request to backend
+    const backendResponse = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!backendResponse.body) {
+      return new Response('No SSE body', {status: 500});
+    }
+
+    // Stream backend SSE response directly to frontend
+    const stream = new ReadableStream({
+      async start(controller) {
+        const reader = backendResponse.body!.getReader();
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    });
+  } catch (error) {
+    console.error('Chat API error:', error);
+    return new Response('Internal server error', {status: 500});
   }
-  
-  // 读取前端传来的 body
-  const body = await req.text();
-  
-  // 后端 SSE 接口地址
-  const backendUrl = process.env.BACKENDURL ? process.env.BACKENDURL : 'http://127.0.0.1:8000/api/chat';
-
-  // 转发到后端
-  const backendResponse = await fetch(`${backendUrl}?user_id=${currentUser.id}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      // 转发鉴权信息（如果有）
-      'Authorization': req.headers.get('authorization') || '',
-    },
-    body: body,
-  });
-
-  if (!backendResponse.body) {
-    return new Response('No SSE body', { status: 500 });
-  }
-
-  // 把后端返回的 SSE 流直接透传给前端
-  const stream = new ReadableStream({
-    async start(controller) {
-      const reader = backendResponse.body!.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        controller.enqueue(value);
-      }
-      controller.close();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    },
-  });
 }

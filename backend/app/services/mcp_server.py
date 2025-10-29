@@ -3,13 +3,20 @@ import os
 import shutil
 from contextlib import AsyncExitStack
 from datetime import timedelta
-from typing import Any, List, Coroutine
+from typing import Any, List
 
 from loguru import logger
-from mcp import Tool, ClientSession, StdioServerParameters
+from mcp import ClientSession, StdioServerParameters, Tool
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult
+
+# async def progress_callback(progress: float, total: float | None, message: str | None) -> None:
+#     logger.info((progress, total, message))
+
+
+async def progress_callback(message) -> None:
+    logger.info(message)
 
 
 class Server:
@@ -17,7 +24,7 @@ class Server:
 
     def __init__(self, name: str, config: dict[str, Any]) -> None:
         """初始化服务器实例。
-        
+
         Args:
             name: 服务器名称
             config: 服务器配置字典
@@ -34,16 +41,26 @@ class Server:
         """初始化所有 MCP Server"""
         try:
             # streamable-http 方式
-            if "type" in self.config and self.config["type"] == "streamable-http":
-                streamable_http_transport = await self.exit_stack.enter_async_context(
-                    streamablehttp_client(
-                        url=self.config["url"],
-                        timeout=timedelta(seconds=60)
+            if (
+                "type" in self.config
+                and self.config["type"] == "streamable-http"
+            ):
+                streamable_http_transport = (
+                    await self.exit_stack.enter_async_context(
+                        streamablehttp_client(
+                            url=self.config["url"],
+                            timeout=timedelta(seconds=60),
+                        )
                     )
                 )
                 read_stream, write_stream, _ = streamable_http_transport
+                # todo 消息 回调 竟然在 此处。。。
                 session = await self.exit_stack.enter_async_context(
-                    ClientSession(read_stream, write_stream)
+                    ClientSession(
+                        read_stream,
+                        write_stream,
+                        message_handler=progress_callback,
+                    )
                 )
                 await session.initialize()
                 self.session = session
@@ -78,18 +95,18 @@ class Server:
 
     async def list_tools(self) -> list[Tool]:
         """从MCP Server列出所有工具
-        
+
         Returns:
             工具列表
-            
+
         Raises:
             RuntimeError: 如果服务器未初始化
         """
-        
+
         # 使用缓存的工具列表，如果存在且未过期（10秒内）
         if self._tools_cache is not None:
             return self._tools_cache
-            
+
         if not self.session:
             raise RuntimeError(f"服务器 {self.name} 未初始化")
 
@@ -136,7 +153,9 @@ class Server:
 
             except Exception as e:
                 attempt += 1
-                logger.warning(f"执行工具 {tool_name} 出错: {e}。尝试 {attempt}/{retries}。")
+                logger.warning(
+                    f"执行工具 {tool_name} 出错: {e}。尝试 {attempt}/{retries}。"
+                )
                 if attempt < retries:
                     logger.info(f"{delay} 秒后重试...")
                     await asyncio.sleep(delay)

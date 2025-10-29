@@ -12,3 +12,8 @@ dependencies = [
     "openai>=1.100.2",
     "python-dotenv>=1.1.1",
 ]
+
+
+[tool.pyright]
+
+reportAny = false

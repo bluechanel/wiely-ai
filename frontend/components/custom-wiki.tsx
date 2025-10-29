@@ -1,30 +1,39 @@
-'use client'
+'use client';
 
-import { usePart } from '@llamaindex/chat-ui'
+import {usePart} from '@llamaindex/chat-ui';
 
-type WikiData = {
-  title: string
-  summary: string
-  url: string
-  category: string
-  lastUpdated: string
+interface WikiData {
+  title: string;
+  summary: string;
+  url: string;
+  category: string;
+  lastUpdated: string;
 }
 
-const WikiPartType = 'data-wiki'
+const WIKI_PART_TYPE = 'data-wiki';
 
-type WikiPart = {
-  type: typeof WikiPartType
-  data: WikiData
+interface WikiPart {
+  type: typeof WIKI_PART_TYPE;
+  data: WikiData;
 }
 
+/**
+ * Custom part component that displays wiki information in a chat message.
+ */
 export function WikiPart() {
-  const wikiData = usePart<WikiPart>(WikiPartType)?.data
-  if (!wikiData) return null
-  return <WikiCard data={wikiData} />
+  const wikiData = usePart<WikiPart>(WIKI_PART_TYPE)?.data;
+  if (!wikiData) return null;
+  return <WikiCard data={wikiData} />;
 }
 
-// A UI widget that displays wiki information, it can be used inline with markdown text
-function WikiCard({ data }: { data: WikiData }) {
+interface WikiCardProps {
+  data: WikiData;
+}
+
+/**
+ * UI widget that displays wiki information inline with markdown text.
+ */
+function WikiCard({data}: WikiCardProps) {
   const iconMap: Record<string, string> = {
     science: '🧪',
     history: '📜',
@@ -34,7 +43,7 @@ function WikiCard({ data }: { data: WikiData }) {
     literature: '📚',
     art: '🎨',
     music: '🎵',
-  }
+  };
 
   const getCategoryColor = (category: string) => {
     const colors: Record<string, string> = {
@@ -48,14 +57,14 @@ function WikiCard({ data }: { data: WikiData }) {
         'from-indigo-50 to-indigo-100 border-indigo-200 text-indigo-900',
       art: 'from-pink-50 to-pink-100 border-pink-200 text-pink-900',
       music: 'from-violet-50 to-violet-100 border-violet-200 text-violet-900',
-    }
+    };
     return (
       colors[category.toLowerCase()] ||
       'from-gray-50 to-gray-100 border-gray-200 text-gray-900'
-    )
-  }
+    );
+  };
 
-  const categoryColorClass = getCategoryColor(data.category)
+  const categoryColorClass = getCategoryColor(data.category);
 
   return (
     <div
@@ -110,5 +119,5 @@ function WikiCard({ data }: { data: WikiData }) {
         </a>
       </div>
     </div>
-  )
+  );
 }

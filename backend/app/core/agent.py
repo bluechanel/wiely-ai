@@ -1,38 +1,54 @@
 """ChatAgent模块负责管理用户对话和与MCP服务的交互。"""
+
 import asyncio
 import copy
 import json
 import os
 import uuid
-from typing import List, Dict, Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Dict, List
 
 from loguru import logger
-from openai.types.chat import ParsedFunctionToolCall, ParsedChatCompletion
 from mem0 import AsyncMemoryClient
+from openai.types.chat import (
+    ParsedChatCompletion,
+    ParsedFunctionToolCall,
+    ParsedFunction,
+)
 
 from app.config.configuration import Configuration
-from app.services.mcp_server import Server
 from app.services.llm_client import LLMClient
+from app.services.mcp_server import Server
+from app.core.exception import ToolExecutionException
+
 # 定义SSE事件前缀
 DATA_PREFIX = "data: "
 
+
 class ChatAgent:
     """管理用户对话和MCP服务交互的代理类。
-    
+
     每个用户对应一个ChatAgent实例，负责管理该用户的对话历史
     和与MCP服务的交互。
     """
 
-    def __init__(self, user_id: str, chat_id: str, max_history: int = 20):
+    def __init__(
+        self,
+        user_id: str,
+        chat_id: str,
+        system_prompt: str,
+        max_history: int = 20,
+    ):
         """初始化ChatAgent。
-        
+
         Args:
             chat_id: 对话ID，通常是用户ID
             max_history: 最大保留的对话历史条数，默认为20
         """
         self.user_id = user_id  # 用户id
         self.chat_id = chat_id  # 当前对话id
-        self.messages: List[Dict[str, str]] = []  # 对话历史
+        self.system_prompt: str = system_prompt
+        self.full_messages: List[Dict[str, str]] = []  # 完整对话历史，可用于回溯
+        self.user_messages: List[Dict[str, str]] = []  # 用户对话历史
         self.servers: List[Server] = []
         self.max_history = max_history
         self.llm_client: LLMClient | None = None
@@ -41,7 +57,7 @@ class ChatAgent:
 
     async def init_mcp_client(self) -> None:
         """初始化MCP客户端。
-        
+
         Raises:
             FileNotFoundError: 如果配置文件不存在
             RuntimeError: 如果初始化服务器失败
@@ -50,12 +66,15 @@ class ChatAgent:
             # 读取mcp配置
             config = Configuration()
             server_config = config.load_config_file(self.config_path)
-            self.servers = [Server(name, srv_config) for name, srv_config in server_config["mcpServers"].items()]
-            
+            self.servers = [
+                Server(name, srv_config)
+                for name, srv_config in server_config["mcpServers"].items()
+            ]
+
             if not self.servers:
                 logger.warning(f"未找到MCP服务器配置，请检查{self.config_path}文件")
                 raise RuntimeError(f"未找到MCP服务器配置，请检查{self.config_path}文件")
-            
+
             # 初始化服务器
             initialized_servers = []
             for server in self.servers:
@@ -78,7 +97,9 @@ class ChatAgent:
         self.llm_client = await LLMClient.create(self.servers)
 
     async def init_mem0_client(self) -> None:
-        self.mem0_client = AsyncMemoryClient(api_key = os.getenv("MEM0_API_KEY", "123456"))
+        self.mem0_client = AsyncMemoryClient(
+            api_key=os.getenv("MEM0_API_KEY", "123456")
+        )
 
     async def cleanup_servers(self) -> None:
         """正确清理所有服务器。"""
@@ -98,11 +119,10 @@ class ChatAgent:
         Returns:
             处理后的响应字典
         """
-        tool_call_id = tool_call.id
-        tool_call = tool_call.function
-        tool_call_name = tool_call.name
-        tool_call_args = tool_call.arguments
-
+        tool_call_id: str = tool_call.id
+        tool_call_function: ParsedFunction = tool_call.function
+        tool_call_name = tool_call_function.name
+        tool_call_args = tool_call_function.arguments
 
         logger.info(f"执行工具: {tool_call_name}, 参数: {tool_call_args}")
 
@@ -125,23 +145,21 @@ class ChatAgent:
                     args = json.loads(tool_call_args)
                 except json.JSONDecodeError as e:
                     logger.error(f"解析工具参数失败: {e}")
-                    raise Exception("工具参数无法被解析")
+                    raise ToolExecutionException(
+                        f"The tool argument cannot be parsed by json.loads()."
+                    )
 
                 # 执行工具调用
                 response = await target_server.execute_tool(tool_call_name, args)
 
                 # 此处工具执行进度的展示 ，需要在服务端 使用 如下代码
-
-                # await ctx.report_progress(
-                #             progress=progress,
-                #             total=1.0,
-                #             message=f"Step {i + 1}/{steps}",
-                #         )
                 if isinstance(response, dict) and "progress" in response:
-                    progress = response["progress"]
-                    total = response["total"]
-                    percentage = (progress / total) * 100
-                    logger.info(f"Tool Run Progress: {progress}/{total} ({percentage:.1f}%)")
+                    progress: int = response["progress"]
+                    total: int = response["total"]
+                    percentage: float = (progress / total) * 100
+                    logger.info(
+                        f"Tool Run Progress: {progress}/{total} ({percentage:.1f}%)"
+                    )
 
                 logger.info(f"工具执行结果: {response}")
                 result = ""
@@ -149,69 +167,75 @@ class ChatAgent:
                     if content.type == "text":
                         result += content.text
                     else:
-                        logger.error(f"工具{tool_call_name},返回的结果type为{content.type}, 原始结果为{response}")
+                        logger.error(
+                            f"工具{tool_call_name},返回的结果type为{content.type}, 原始结果为{response}"
+                        )
                 return {
                     "tool_call_id": tool_call_id,
                     "tool_call_name": tool_call_name,
                     "tool_call_args": tool_call_args,
-                    "tool_call_result": result
+                    "tool_call_result": result,
                 }
-            except Exception as e:
+            except ToolExecutionException as e:
                 error_msg = f"执行工具 {tool_call_name} 时出错: {str(e)}"
                 logger.error(error_msg)
-                raise Exception(f"执行工具时出错: {str(e)}")
+                raise ToolExecutionException(
+                    f"Execution tool finds an error : {str(e)}"
+                )
         else:
             error_msg = f"找不到可以处理工具 {tool_call_name} 的服务器"
             logger.error(error_msg)
             raise Exception(error_msg)
 
-    async def run_all_tools(self, tool_calls: List[ParsedFunctionToolCall]) -> AsyncGenerator[
-        dict[str, str | Any], None]:
-        """
-
-        """
-        tasks = [self.run_tool(tc) for tc in tool_calls]
-        for coro in asyncio.as_completed(tasks):
+    async def run_all_tools(
+        self, tool_calls: list[ParsedFunctionToolCall]
+    ) -> AsyncGenerator[dict[str, str | Any], None]:
+        """ """
+        for coro in asyncio.gather(
+            *(self.run_tool(tc) for tc in tool_calls), return_exceptions=True
+        ):
             result = await coro
             yield result
 
-
     async def ask(self, user_message: str) -> AsyncGenerator[str, Any]:
         """处理用户输入并返回响应。
-        
+
         Args:
             user_message: 用户消息
-            
+
         Returns:
             助手响应
-            
+
         Raises:
             RuntimeError: 如果MCP客户端未初始化或处理过程中出错
         """
-        # todo 滑动窗口 限制历史消息数量,存入数据库 重新查找
-        if len(self.messages) > self.max_history * 2:  # 因为每次对话有用户和助手两条消息
-            self.messages = self.messages[-self.max_history*2:]
-
-        # 短期对话历史记忆
-        messages = copy.deepcopy(self.messages)
-
-        # 添加用户消息到历史
-        self.messages.append({"role": "user", "content": user_message})
-        # 查询用户记忆并添加到 短期对话历史 中
-        search_memory = await self.mem0_client.search(user_message, version="v2", filters={
-            "AND":[
-                {
-                    "user_id":self.user_id
-                }
-            ]
-        })
+        # 本次任务对话历史, 从用户对话中提取，先检查长度
+        if (
+            len(self.user_messages) > self.max_history * 2
+        ):  # 因为每次对话有用户和助手两条消息
+            self.user_messages = self.user_messages[-self.max_history * 2 :]
+        messages = copy.deepcopy(self.user_messages)
+        messages_len = len(messages)
+        # 查询用户记忆
+        search_memory = await self.mem0_client.search(
+            user_message,
+            version="v2",
+            filters={"AND": [{"user_id": self.user_id}]},
+        )
         memory = "之前对话中的相关信息：\n"
         for m in search_memory:
             memory += f"- {m.get('memory', '')} \n"
-        messages.append({"role": "user", "content": "/no_think \n" + memory + user_message})
+        # 添加到完整对话历史
+        messages.append(
+            {"role": "user", "content": "/no_think \n" + memory + user_message}
+        )
+        # 添加系统提示
+        if self.system_prompt:
+            messages.insert(0, {"role": "system", "content": self.system_prompt})
 
-        async def run(tool_call_count: int = 0, max_tools: int = 5) -> AsyncGenerator[
-            str | dict[str, str | dict[str, str]] | Any, Any]:
+        async def run(
+            tool_call_count: int = 0, max_tools: int = 5
+        ) -> AsyncGenerator[str | dict[str, str | dict[str, str]] | Any, Any]:
             """获取LLM响应并处理工具调用。
 
             Args:
@@ -230,7 +254,11 @@ class ChatAgent:
                     if message_id is None:
                         message_id = str(uuid.uuid4())
                         yield f"{DATA_PREFIX}{json.dumps({'id': message_id, 'type': 'text-start'})}\n\n"
-                    delta_chunk = {"id": message_id, "type": "text-delta", "delta": event}
+                    delta_chunk = {
+                        "id": message_id,
+                        "type": "text-delta",
+                        "delta": event,
+                    }
                     yield f"{DATA_PREFIX}{json.dumps(delta_chunk)}\n\n"
                 if isinstance(event, ParsedChatCompletion):
                     logger.debug(event)
@@ -241,48 +269,83 @@ class ChatAgent:
                     choice = event.choices[0]
                     if choice.finish_reason == "tool_calls":
                         # 添加工具消息
-                        messages.append({
+                        messages.append(
+                            {
                                 "role": "assistant",
-                                "tool_calls": choice.message.tool_calls
-                            })
+                                "tool_calls": choice.message.tool_calls,
+                            }
+                        )
                         # 增加工具调用计数
                         tool_call_count += 1
+                        tool_calls = choice.message.tool_calls
                         # 发送工具调用信息
-                        for tool_call in choice.message.tool_calls:
+                        for tool_call in tool_calls:
                             # 回复调用工具
                             chunk = {
                                 "id": tool_call.id,
-                                "type": f"data-event",  # Add data- prefix
+                                "type": "data-event",  # Add data- prefix
                                 "data": {
                                     "title": "调用工具执行",
-                                    "status": "pending"
-                                }
+                                    "status": "pending",
+                                },
                             }
                             yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
                         # 并行调用工具
-                        async for result in self.run_all_tools(tool_calls=choice.message.tool_calls):
-                            # 发送工具调用结果
-                            chunk = {
-                                "id": result["tool_call_id"],
-                                "type": f"data-event",  # Add data- prefix
-                                "data": {
-                                    "title": "工具调用完成",
-                                    "status": "success",
-                                    "data": {"result": result["tool_call_result"]}
+                        async for index, result in enumrate(
+                            self.run_all_tools(tool_calls=choice.message.tool_calls)
+                        ):
+                            # todo 判断结果，如果是异常，发送工具调用异常
+                            if isinstance(result, Exception):
+                                chunk = {
+                                    "id": tool_calls[index].id,
+                                    "type": "data-event",  # Add data- prefix
+                                    "data": {
+                                        "title": "工具调用失败",
+                                        "status": "error",
+                                        "data": {"result": str(result)},
+                                    },
                                 }
-                            }
+                            else:
+                                # 发送工具调用结果
+                                chunk = {
+                                    "id": result["tool_call_id"],
+                                    "type": "data-event",  # Add data- prefix
+                                    "data": {
+                                        "title": "工具调用完成",
+                                        "status": "success",
+                                        "data": {"result": result["tool_call_result"]},
+                                    },
+                                }
                             yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
-                            messages.append({"role":"tool", "tool_call_id": result["tool_call_id"], "content": result["tool_call_result"]})
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": result["tool_call_id"],
+                                    "content": result["tool_call_result"],
+                                }
+                            )
                         # 如果是工具响应，继续递归调用
-                        await asyncio.sleep(0.1) # 添加短暂延迟，避免过快的递归调用
+                        await asyncio.sleep(0.1)  # 添加短暂延迟，避免过快的递归调用
                         async for message in run(tool_call_count, max_tools):
                             yield message
                     else:
-                        # 此处将最终的答案填充到消息列表中
-                        self.messages.append({"role": "assistant", "content": choice.message.content})
+                        # 将任务级 消息 写入full_messages
+                        self.full_messages.extend(messages[messages_len:])
+                        # 此处将最终的答案 写入 用户对话历史
+                        self.user_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": choice.message.content,
+                            }
+                        )
                         # 本次对话信息 存入 记忆
-                        await self.mem0_client.add(self.messages, user_id=self.user_id, output_format="v1.1") # 支持传入 agent_id user_id app_id run_id, async_mode 可异步添加记忆
+                        await self.mem0_client.add(
+                            self.user_messages,
+                            user_id=self.user_id,
+                            output_format="v1.1",
+                        )  # 支持传入 agent_id user_id app_id run_id, async_mode 可异步添加记忆
             return
+
         return run()
 
     async def connect(self) -> None:
@@ -298,24 +361,10 @@ class ChatAgent:
             logger.info(f"用户 {self.chat_id} 的ChatAgent资源已清理")
         except Exception as e:
             logger.error(f"清理ChatAgent资源时出错: {e}")
-                
-    async def get_history(self) -> List[Dict[str, str]]:
-        """获取对话历史。
-        
-        Returns:
-            对话历史列表
-        """
-        return self.messages
-        
-    async def clear_history(self) -> None:
-        """清除对话历史。"""
-        self.messages = []
-        logger.info(f"用户 {self.chat_id} 的对话历史已清除")
 
-            
     async def reconnect(self) -> bool:
         """重新连接MCP服务。
-        
+
         Returns:
             连接是否成功
         """
