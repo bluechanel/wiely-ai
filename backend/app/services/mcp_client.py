@@ -3,7 +3,7 @@ import os
 import shutil
 from contextlib import AsyncExitStack
 from datetime import timedelta
-from typing import Any, List
+from typing import Any
 
 from loguru import logger
 from mcp import ClientSession, StdioServerParameters, Tool
@@ -11,15 +11,12 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult
 
-# async def progress_callback(progress: float, total: float | None, message: str | None) -> None:
-#     logger.info((progress, total, message))
 
-
-async def progress_callback(message) -> None:
+async def progress_callback(message: str) -> None:
     logger.info(message)
 
 
-class Server:
+class Client:
     """管理MCP服务器连接和工具执行。"""
 
     def __init__(self, name: str, config: dict[str, Any]) -> None:
@@ -35,22 +32,17 @@ class Server:
         self.session: ClientSession | None = None
         self._cleanup_lock: asyncio.Lock = asyncio.Lock()
         self.exit_stack: AsyncExitStack = AsyncExitStack()
-        self._tools_cache: List[Tool] | None = None
+        self._tools_cache: list[Tool] | None = None
 
     async def initialize(self) -> None:
         """初始化所有 MCP Server"""
         try:
             # streamable-http 方式
-            if (
-                "type" in self.config
-                and self.config["type"] == "streamable-http"
-            ):
-                streamable_http_transport = (
-                    await self.exit_stack.enter_async_context(
-                        streamablehttp_client(
-                            url=self.config["url"],
-                            timeout=timedelta(seconds=60),
-                        )
+            if "type" in self.config and self.config["type"] == "streamable-http":
+                streamable_http_transport = await self.exit_stack.enter_async_context(
+                    streamablehttp_client(
+                        url=self.config["url"],
+                        timeout=timedelta(seconds=60),
                     )
                 )
                 read_stream, write_stream, _ = streamable_http_transport

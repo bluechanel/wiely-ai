@@ -9,15 +9,10 @@ from typing import Any, AsyncGenerator, Dict, List
 
 from loguru import logger
 from mem0 import AsyncMemoryClient
-from openai.types.chat import (
-    ParsedChatCompletion,
-    ParsedFunctionToolCall,
-    ParsedFunction,
-)
-
-from app.config.configuration import Configuration
+from openai.types.chat import ParsedFunctionToolCall, ParsedFunction
+from app.config.configuration import MCPConfiguration
 from app.services.llm_client import LLMClient
-from app.services.mcp_server import Server
+from app.services.mcp_client import Client
 from app.core.exception import ToolExecutionException
 
 # 定义SSE事件前缀
@@ -49,7 +44,7 @@ class ChatAgent:
         self.system_prompt: str = system_prompt
         self.full_messages: List[Dict[str, str]] = []  # 完整对话历史，可用于回溯
         self.user_messages: List[Dict[str, str]] = []  # 用户对话历史
-        self.servers: List[Server] = []
+        self.servers: List[Client] = []
         self.max_history = max_history
         self.llm_client: LLMClient | None = None
         self.mem0_client: AsyncMemoryClient | None = None
@@ -64,10 +59,10 @@ class ChatAgent:
         """
         try:
             # 读取mcp配置
-            config = Configuration()
+            config = MCPConfiguration()
             server_config = config.load_config_file(self.config_path)
             self.servers = [
-                Server(name, srv_config)
+                Client(name, srv_config)
                 for name, srv_config in server_config["mcpServers"].items()
             ]
 
@@ -227,7 +222,8 @@ class ChatAgent:
             memory += f"- {m.get('memory', '')} \n"
         # 添加到完整对话历史
         messages.append(
-            {"role": "user", "content": "/no_think \n" + memory + user_message}
+            # {"role": "user", "content": "/no_think \n" + memory + user_message}
+            {"role": "user", "content": memory + user_message}
         )
         # 添加系统提示
         if self.system_prompt:
@@ -248,103 +244,105 @@ class ChatAgent:
             # 检查工具调用次数是否超过限制
             if tool_call_count >= max_tools:
                 yield f"已达到最大工具调用次数限制({max_tools}次)"
-            message_id = None
-            async for event in self.llm_client.get_response(messages):
-                if isinstance(event, str):
-                    if message_id is None:
-                        message_id = str(uuid.uuid4())
-                        yield f"{DATA_PREFIX}{json.dumps({'id': message_id, 'type': 'text-start'})}\n\n"
-                    delta_chunk = {
-                        "id": message_id,
-                        "type": "text-delta",
-                        "delta": event,
-                    }
-                    yield f"{DATA_PREFIX}{json.dumps(delta_chunk)}\n\n"
-                if isinstance(event, ParsedChatCompletion):
-                    logger.debug(event)
-                    if message_id:
-                        yield f"{DATA_PREFIX}{json.dumps({'id': message_id, 'type': 'text-end'})}\n\n"
-                        message_id = None
+                return
 
-                    choice = event.choices[0]
-                    if choice.finish_reason == "tool_calls":
-                        # 添加工具消息
-                        messages.append(
-                            {
-                                "role": "assistant",
-                                "tool_calls": choice.message.tool_calls,
-                            }
-                        )
-                        # 增加工具调用计数
-                        tool_call_count += 1
-                        tool_calls = choice.message.tool_calls
-                        # 发送工具调用信息
-                        for tool_call in tool_calls:
-                            # 回复调用工具
+            message_status: dict[str, str | None] = {
+                "reasoning": None,  # 当前 reasoning message_id
+                "text": None,  # 当前 text message_id
+            }
+            async for message_chunk in self.llm_client.get_response(messages):
+                match message_chunk.type:
+                    case "reasoning":
+                        if message_status["reasoning"] is None:
+                            message_status["reasoning"] = f"reasoning-{uuid.uuid4()}"
+                            yield f"{DATA_PREFIX}{json.dumps({'id': message_status['reasoning'], 'type': 'reasoning-start'}, ensure_ascii=False)}\n\n"
+
+                        # reasoning delta
+                        yield f"{DATA_PREFIX}{json.dumps({'id': message_status['reasoning'], 'type': 'reasoning-delta', 'delta': message_chunk.data}, ensure_ascii=False)}\n\n"
+
+                    case "message":
+                        # 如果reasoning 关闭
+                        if message_status["reasoning"]:
+                            yield f"{DATA_PREFIX}{json.dumps({'id': message_status['reasoning'], 'type': 'reasoning-end'})}\n\n"
+                            message_status["reasoning"] = None
+                        if message_status["text"] is None:
+                            message_status["text"] = f"text-{uuid.uuid4()}"
+                            yield f"{DATA_PREFIX}{json.dumps({'id': message_status['text'], 'type': 'text-start'}, ensure_ascii=False)}\n\n"
+
+                        # text delta
+                        yield f"{DATA_PREFIX}{json.dumps({'id': message_status['text'], 'type': 'text-delta', 'delta': message_chunk.data}, ensure_ascii=False)}\n\n"
+
+                    case "tool_call":
+                        # 关闭
+                        if message_status["reasoning"]:
+                            yield f"{DATA_PREFIX}{json.dumps({'id': message_status['reasoning'], 'type': 'reasoning-end'})}\n\n"
+                            message_status["reasoning"] = None
+
+                        if message_status["text"]:
+                            yield f"{DATA_PREFIX}{json.dumps({'id': message_status['text'], 'type': 'text-end'})}\n\n"
+                            message_status["text"] = None
+
+                        # 模型正在生成工具调用输入
+                        for tool_call in message_chunk.data:
+                            tool_id = tool_call.id
+                            tool_name = tool_call.function.name
+
+                            # 开始事件
                             chunk = {
-                                "id": tool_call.id,
-                                "type": "data-event",  # Add data- prefix
-                                "data": {
-                                    "title": "调用工具执行",
-                                    "status": "pending",
-                                },
+                                "type": "tool-input-start",
+                                "toolCallId": tool_id,
+                                "toolName": tool_name,
                             }
-                            yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
-                        # 并行调用工具
-                        async for index, result in enumrate(
-                            self.run_all_tools(tool_calls=choice.message.tool_calls)
-                        ):
-                            # todo 判断结果，如果是异常，发送工具调用异常
-                            if isinstance(result, Exception):
-                                chunk = {
-                                    "id": tool_calls[index].id,
-                                    "type": "data-event",  # Add data- prefix
-                                    "data": {
-                                        "title": "工具调用失败",
-                                        "status": "error",
-                                        "data": {"result": str(result)},
-                                    },
-                                }
-                            else:
-                                # 发送工具调用结果
-                                chunk = {
-                                    "id": result["tool_call_id"],
-                                    "type": "data-event",  # Add data- prefix
-                                    "data": {
-                                        "title": "工具调用完成",
-                                        "status": "success",
-                                        "data": {"result": result["tool_call_result"]},
-                                    },
-                                }
-                            yield f"{DATA_PREFIX}{json.dumps(chunk)}\n\n"
-                            messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": result["tool_call_id"],
-                                    "content": result["tool_call_result"],
-                                }
-                            )
-                        # 如果是工具响应，继续递归调用
-                        await asyncio.sleep(0.1)  # 添加短暂延迟，避免过快的递归调用
-                        async for message in run(tool_call_count, max_tools):
-                            yield message
-                    else:
-                        # 将任务级 消息 写入full_messages
-                        self.full_messages.extend(messages[messages_len:])
-                        # 此处将最终的答案 写入 用户对话历史
-                        self.user_messages.append(
-                            {
-                                "role": "assistant",
-                                "content": choice.message.content,
+
+                            yield f"{DATA_PREFIX}{json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+                            # 如果有增量输入 (比如模型逐字输出参数)
+                            # if hasattr(tool_call.function, "arguments_stream"):
+                            #     async for delta in tool_call.function.arguments_stream:
+                            #         yield self._wrap_data({
+                            #             "type": "tool-input-delta",
+                            #             "toolCallId": tool_id,
+                            #             "inputTextDelta": delta,
+                            #         })
+
+                            # 工具输入可用（参数生成完毕）
+                            chunk = {
+                                "type": "tool-input-available",
+                                "toolCallId": tool_id,
+                                "toolName": tool_name,
+                                "input": tool_call.function.arguments,
                             }
-                        )
-                        # 本次对话信息 存入 记忆
-                        await self.mem0_client.add(
-                            self.user_messages,
-                            user_id=self.user_id,
-                            output_format="v1.1",
-                        )  # 支持传入 agent_id user_id app_id run_id, async_mode 可异步添加记忆
-            return
+
+                            yield f"{DATA_PREFIX}{json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+                            # 执行工具逻辑
+                            async for result in self.run_all_tools([tool_call]):
+                                chunk = {
+                                    "type": "tool-output-available",
+                                    "toolCallId": result["tool_call_id"],
+                                    "output": result["tool_call_result"],
+                                }
+                                messages.append(
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": result["tool_call_id"],
+                                        "content": result["tool_call_result"],
+                                    }
+                                )
+                                yield f"{DATA_PREFIX}{json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+                        # 工具调用完成，递归继续主流程
+                        tool_call_count += 1
+                        if tool_call_count < max_tools:
+                            await asyncio.sleep(0.05)
+                            async for msg in run(tool_call_count):
+                                yield msg
+            # 补 所有的结束
+            if message_status["reasoning"]:
+                yield f"{DATA_PREFIX}{json.dumps({'id': message_status['reasoning'], 'type': 'reasoning-end'})}\n\n"
+
+            if message_status["text"]:
+                yield f"{DATA_PREFIX}{json.dumps({'id': message_status['text'], 'type': 'text-end'})}\n\n"
 
         return run()
 

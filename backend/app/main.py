@@ -1,12 +1,8 @@
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat_router
+from app.api.chat import router
 from app.utils.logging import setup_logging
-
-# 加载环境变量
-load_dotenv(verbose=True)
 
 # 设置日志
 setup_logging()
@@ -26,7 +22,7 @@ app.add_middleware(
 )
 
 # 注册路由
-app.include_router(chat_router, prefix="/api")
+app.include_router(router, prefix="/api")
 
 
 # 健康检查端点

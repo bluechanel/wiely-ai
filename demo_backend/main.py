@@ -1,11 +1,12 @@
+from typing import Literal
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Request
-from pydantic import BaseModel
 import json
 from openai import AsyncOpenAI
 import asyncio
+
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 
@@ -20,17 +21,36 @@ app.add_middleware(
 
 
 # 配置你的 API keys
-
 openai_client = AsyncOpenAI(
     api_key="your-openai-api-key", base_url="http://192.168.11.199:1282/v1"
 )
 
 
+class Part(BaseModel):
+    type: Literal["text"]
+    text: str
+
+
+class Message(BaseModel):
+    id: str = Field(..., description="消息id")
+    role: str = Field(..., description="消息角色 user assistant")
+    parts: list[Part]
+
+
+class RequestModel(BaseModel):
+    id: str = Field(..., description="消息id")
+    model: str = Field(..., description="模型名称")
+    webSearch: bool = Field(..., description="是否启用搜索工具")
+    messages: list[Message]
+    trigger: str
+
+
 @app.post("/api/chat")
-async def chat(request: Request):
+async def chat(request: RequestModel):
     """
     处理聊天请求，支持流式响应
     """
+    print(request)
     return StreamingResponse(
         stream_chat_completion(request),
         media_type="text/event-stream",
