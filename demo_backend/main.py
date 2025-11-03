@@ -1,12 +1,11 @@
-from typing import Literal
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
 from openai import AsyncOpenAI
 import asyncio
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, constr
 
 app = FastAPI()
 
@@ -26,19 +25,66 @@ openai_client = AsyncOpenAI(
 )
 
 
-class Part(BaseModel):
-    type: Literal["text"]
+class TextPart(BaseModel):
+    type: str = "text"
     text: str
+    state: str | None
+
+
+class ReasoningPart(BaseModel):
+    type: str = "reasoning"
+    text: str
+    state: str
+
+
+class ToolPart(BaseModel):
+    type: constr(pattern=r"^tool-.+")
+    toolCallId: str
+    state: str
+    input: dict | None
+    output: dict | None
+
+
+class DataPart(BaseModel):
+    type: constr(pattern=r"^datal-.+")
+    data: dict | None
+
+
+class SourceUrlPart(BaseModel):
+    type: str = "source-url"
+    sourceId: str
+    url: str
+
+
+class SourceDocumentPart(BaseModel):
+    type: str = "source-document"
+    sourceId: str
+    mediaType: str
+    title: str
+
+
+class FilePart(BaseModel):
+    type: str = "file"
+    mediaType: str
+    url: str
 
 
 class Message(BaseModel):
     id: str = Field(..., description="消息id")
     role: str = Field(..., description="消息角色 user assistant")
-    parts: list[Part]
+    parts: list[
+        TextPart
+        | ReasoningPart
+        | ToolPart
+        | DataPart
+        | SourceUrlPart
+        | SourceDocumentPart
+        | FilePart
+    ]
 
 
 class RequestModel(BaseModel):
-    id: str = Field(..., description="消息id")
+    id: str = Field(..., description="对话 conversation id")
     model: str = Field(..., description="模型名称")
     webSearch: bool = Field(..., description="是否启用搜索工具")
     messages: list[Message]
@@ -46,11 +92,13 @@ class RequestModel(BaseModel):
 
 
 @app.post("/api/chat")
-async def chat(request: RequestModel):
+async def chat(request: Request):
+    # async def chat(request: RequestModel):
     """
     处理聊天请求，支持流式响应
     """
-    print(request)
+    print(await request.json())
+    # print(request)
     return StreamingResponse(
         stream_chat_completion(request),
         media_type="text/event-stream",
