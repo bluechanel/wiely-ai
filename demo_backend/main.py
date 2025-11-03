@@ -1,18 +1,19 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-import json
-from openai import AsyncOpenAI
 import asyncio
+import json
+from typing import Annotated
 
-from pydantic import BaseModel, Field, constr
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field, StringConstraints
 
 app = FastAPI()
 
 # 允许前端跨域访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js dev server
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,7 +39,7 @@ class ReasoningPart(BaseModel):
 
 
 class ToolPart(BaseModel):
-    type: constr(pattern=r"^tool-.+")
+    type: Annotated[str, StringConstraints(pattern=r"^tool-.+")]
     toolCallId: str
     state: str
     input: dict | None
@@ -46,7 +47,7 @@ class ToolPart(BaseModel):
 
 
 class DataPart(BaseModel):
-    type: constr(pattern=r"^datal-.+")
+    type: Annotated[str, StringConstraints(pattern=r"^data-.+")]
     data: dict | None
 
 
@@ -67,6 +68,7 @@ class FilePart(BaseModel):
     type: str = "file"
     mediaType: str
     url: str
+    filename: str | None
 
 
 class Message(BaseModel):
