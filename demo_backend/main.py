@@ -203,7 +203,7 @@ async def stream_chat_completion(request):
     yield f"data: {json.dumps({'type': 'source-document', 'sourceId': 'https://example.com', 'mediaType': 'file', 'title': 'Title'})}\n\n"
 
     await asyncio.sleep(0.1)
-    yield f"data: {json.dumps({'type': 'file', 'url': 'https://v2fy.com/asset/0i/ChineseBQB/107_FLittleBrother_%E8%91%AB%E8%8A%A6%E5%85%84%E5%BC%9F_BQB/0000000107.gif', 'mediaType': 'image/gif'})}\n\n"
+    yield f"data: {json.dumps({'type': 'file', 'url': 'https://static.simpledesktops.com/uploads/desktops/2017/06/02/bg-wallpaper.png', 'mediaType': 'image/png'})}\n\n"
     # todo 不显示
     await asyncio.sleep(0.1)
     yield f"data: {json.dumps({'type': 'data-weather', 'data': {'location': 'SF', 'temperature': 100}})}\n\n"
